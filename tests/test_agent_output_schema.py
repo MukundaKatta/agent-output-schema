@@ -341,3 +341,62 @@ def test_validate_extra_keys_ignored():
     schema = OutputSchema([FieldSpec("x", str)])
     result = schema.validate({"x": "hello", "extra": 42})
     assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# OutputSchema.validate — documented edge-case contracts
+# ---------------------------------------------------------------------------
+
+
+def test_validate_validators_run_on_wrong_type():
+    # When a value has the wrong type but still triggers a validator (a list
+    # has __len__), both the type error and the validator error are reported.
+    schema = OutputSchema([FieldSpec("title", str, validators=[min_length(5)])])
+    result = schema.validate({"title": ["a", "b"]})
+    assert not result.is_valid
+    messages = [e.message for e in result.errors_for("title")]
+    assert any("expected type 'str'" in m for m in messages)
+    assert any("min_length=5" in m for m in messages)
+
+
+def test_validate_optional_wrong_type_still_reported():
+    # An optional field that is present but the wrong type is still type-checked.
+    schema = OutputSchema([FieldSpec("score", float, required=False)])
+    result = schema.validate({"score": "high"})
+    assert not result.is_valid
+
+
+def test_min_value_skips_non_numeric():
+    # min_value is type-guarded: non-numeric values pass through untouched.
+    assert min_value(0.0)("abc") is None
+    assert min_value(0.0)([1, 2, 3]) is None
+
+
+def test_max_value_skips_non_numeric():
+    assert max_value(1.0)("abc") is None
+    assert max_value(1.0)(None) is None
+
+
+def test_regex_match_skips_non_string():
+    # regex_match only applies to str values; non-strings pass.
+    assert regex_match(r"^\d+$")(123) is None
+    assert regex_match(r"^\d+$")(None) is None
+
+
+def test_max_length_skips_lenless_value():
+    # max_length only constrains values that have __len__.
+    assert max_length(3)(42) is None
+
+
+def test_result_errors_attribute_exposes_all_errors():
+    # The README documents direct access to result.errors as the primary API.
+    schema = OutputSchema(
+        [
+            FieldSpec("title", str, required=True, validators=[min_length(3)]),
+            FieldSpec("score", float, required=True, validators=[between(0.0, 1.0)]),
+        ]
+    )
+    result = schema.validate({"title": "Hi", "score": 1.5})
+    assert not result.is_valid
+    fields = {e.field for e in result.errors}
+    assert fields == {"title", "score"}
